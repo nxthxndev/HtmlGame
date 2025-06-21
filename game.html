@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ultimate Wave Survival</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron&display=swap');
+  * {
+    margin: 0; padding: 0; box-sizing: border-box; user-select: none;
+  }
+  body, html {
+    width: 100%; height: 100%; overflow: hidden;
+    background: linear-gradient(135deg, #121212, #1e1e1e);
+    font-family: 'Orbitron', monospace, sans-serif;
+    color: #eee;
+  }
+  #gameCanvas {
+    display: block;
+    margin: 20px auto;
+    background: #111;
+    border: 3px solid #333;
+    box-shadow: 0 0 15px #00ffccaa;
+    border-radius: 12px;
+  }
+  #uiOverlay {
+    position: fixed;
+    top: 20px; left: 50%; transform: translateX(-50%);
+    width: 320px;
+    text-align: center;
+    font-size: 18px;
+    letter-spacing: 1.2px;
+  }
+  #menu, #gameOverScreen, #pauseScreen {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: #222a;
+    padding: 30px 40px;
+    border-radius: 14px;
+    box-shadow: 0 0 30px #00ffcccc;
+    text-align: center;
+    width: 320px;
+    display: none;
+  }
+  #menu.active, #gameOverScreen.active, #pauseScreen.active {
+    display: block;
+  }
+  button {
+    margin-top: 18px;
+    padding: 12px 30px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    background: #00ffcc;
+    color: #111;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+  }
+  button:hover {
+    background: #00ccaa;
+  }
+  .barContainer {
+    background: #333;
+    border-radius: 10px;
+    overflow: hidden;
+    height: 22px;
+    margin: 6px 0 12px;
+  }
+  .barFill {
+    background: #00ffcc;
+    height: 100%;
+    width: 100%;
+    transition: width 0.2s ease;
+  }
+  .enemyTypeFast {
+    fill: #ff5555;
+    stroke: #bb0000;
+  }
+  .enemyTypeTank {
+    fill: #ffaa00;
+    stroke: #aa7700;
+  }
+</style>
+</head>
+<body>
+
+<div id="uiOverlay">
+  <div>HP: <span id="hpText">100</span></div>
+  <div class="barContainer"><div id="hpBar" class="barFill"></div></div>
+  <div>Wave: <span id="waveText">1</span></div>
+  <div>Score: <span id="scoreText">0</span></div>
+</div>
+
+<canvas id="gameCanvas" width="960" height="640"></canvas>
+
+<div id="menu" class="active">
+  <h1>Ultimate Wave Survival</h1>
+  <p>Survive endless waves of enemies! Shoot, dodge, upgrade.</p>
+  <button id="startBtn">Start Game</button>
+  <button id="toggleMusicBtn">Toggle Music 🎵</button>
+</div>
+
+<div id="pauseScreen">
+  <h1>Paused</h1>
+  <button id="resumeBtn">Resume</button>
+  <button id="restartBtn">Restart</button>
+  <button id="exitBtn">Exit to Menu</button>
+</div>
+
+<div id="gameOverScreen">
+  <h1>Game Over</h1>
+  <p>Wave reached: <span id="finalWave">1</span></p>
+  <p>Score: <span id="finalScore">0</span></p>
+  <button id="tryAgainBtn">Try Again</button>
+  <button id="goMenuBtn">Main Menu</button>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const hpText = document.getElementById('hpText');
+  const hpBar = document.getElementById('hpBar');
+  const waveText = document.getElementById('waveText');
+  const scoreText = document.getElementById('scoreText');
+
+  const menu = document.getElementById('menu');
+  const pauseScreen = document.getElementById('pauseScreen');
+  const gameOverScreen = document.getElementById('gameOverScreen');
+
+  const finalWaveText = document.getElementById('finalWave');
+  const finalScoreText = document.getElementById('finalScore');
+
+  // Buttons
+  const startBtn = document.getElementById('startBtn');
+  const toggleMusicBtn = document.getElementById('toggleMusicBtn');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const exitBtn = document.getElementById('exitBtn');
+  const tryAgainBtn = document.getElementById('tryAgainBtn');
+  const goMenuBtn = document.getElementById('goMenuBtn');
+
+  // Constants
+  const PLAYER_SIZE = 32;
+  const PLAYER_SPEED = 5;
+  const BULLET_SPEED = 10;
+  const BULLET_SIZE = 6;
+  const ENEMY_SIZE = 28;
+  const ENEMY_SPEED_BASE = 1.2;
+  const ENEMY_SPEED_FAST = 2.3;
+  const ENEMY_SPEED_TANK = 0.7;
+
+  const PLAYER_MAX_HP = 100;
+  const FIRE_COOLDOWN = 150; // ms
+  const INVINCIBLE_TIME = 1000; // ms after hit
+
+  // Game state
+  let player, bullets, enemies, keys, lastFire, wave, score, gameRunning, paused, invincibleTimer;
+  let musicPlaying = true;
+
+  // Audio setup
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let bgmOscillator, bgmGain;
+
+  function playBgm() {
+    if (bgmOscillator) return;
+    bgmOscillator = audioCtx.createOscillator();
+    bgmGain = audioCtx.createGain();
+    bgmOscillator.type = 'triangle';
+    bgmOscillator.frequency.setValueAtTime(110, audioCtx.currentTime);
+    bgmGain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+    bgmOscillator.connect(bgmGain).connect(audioCtx.destination);
+    bgmOscillator.start();
+  }
+  function stopBgm() {
+    if (!bgmOscillator) return;
+    bgmOscillator.stop();
+    bgmOscillator.disconnect();
+    bgmGain.disconnect();
+    bgmOscillator = null;
+    bgmGain = null;
+  }
+  function toggleMusic() {
+    if (musicPlaying) {
+      stopBgm();
+      musicPlaying = false;
+      toggleMusicBtn.textContent = 'Music Off 🔇';
+    } else {
+      playBgm();
+      musicPlaying = true;
+      toggleMusicBtn.textContent = 'Toggle Music 🎵';
+    }
+  }
+
+  // Entities
+  class Player {
+    constructor() {
+      this.x = canvas.width/2;
+      this.y = canvas.height/2;
+      this.size = PLAYER_SIZE;
+      this.speed = PLAYER_SPEED;
+      this.hp = PLAYER_MAX_HP;
+      this.lastHitTime = 0;
+    }
+    move() {
+      if (keys['w'] || keys['ArrowUp']) this.y -= this.speed;
+      if (keys['s'] || keys['ArrowDown']) this.y += this.speed;
+      if (keys['a'] || keys['ArrowLeft']) this.x -= this.speed;
+      if (keys['d'] || keys['ArrowRight']) this.x += this.speed;
+
+      // Boundaries
+      this.x = Math.min(Math.max(this.size/2, this.x), canvas.width - this.size/2);
+      this.y = Math.min(Math.max(this.size/2, this.y), canvas.height - this.size/2);
+    }
+    draw() {
+      ctx.save();
+      // Flash red if recently hit
+      if (Date.now() - this.lastHitTime < INVINCIBLE_TIME) {
+        ctx.fillStyle = `rgba(255,0,0,${0.6 * (1 - (Date.now() - this.lastHitTime) / INVINCIBLE_TIME)})`;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size/1.8, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#0ff';
+      ctx.shadowColor = '#0ff';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size/2, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+    takeDamage(amount) {
+      if (Date.now() - this.lastHitTime < INVINCIBLE_TIME) return false;
+      this.hp -= amount;
+      this.lastHitTime = Date.now();
+      return true;
+    }
+  }
+
+  class Bullet {
+    constructor(x, y, dx, dy) {
+      this.x = x;
+      this.y = y;
+      this.dx = dx;
+      this.dy = dy;
+      this.size = BULLET_SIZE;
+      this.speed = BULLET_SPEED;
+      this.isDead = false;
+    }
+    update() {
+      this.x += this.dx * this.speed;
+      this.y += this.dy * this.speed;
+      if (this.x < -this.size || this.x > canvas.width+this.size || this.y < -this.size || this.y > canvas.height+this.size) {
+        this.isDead = true;
+      }
+    }
+    draw() {
+      ctx.save();
+      ctx.fillStyle = '#00ffcc';
+      ctx.shadowColor = '#00ffcc';
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size/2, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  class Enemy {
+    constructor(type = 'normal') {
+      this.type = type;
+      this.size = ENEMY_SIZE;
+      this.speed = ENEMY_SPEED_BASE;
+      this.hp = 30;
+      if (type === 'fast') {
+        this.speed = ENEMY_SPEED_FAST;
+        this.hp = 15;
+      } else if (type === 'tank') {
+        this.speed = ENEMY_SPEED_TANK;
+        this.hp = 70;
+        this.size = ENEMY_SIZE * 1.4;
+      }
+      this.x = Math.random() < 0.5 ? -this.size : canvas.width + this.size;
+      this.y = Math.random() * canvas.height;
+      this.isDead = false;
+    }
+    update(player) {
+      let dx = player.x - this.x;
+      let dy = player.y - this.y;
+      let dist = Math.hypot(dx, dy);
+      if (dist > 0) {
+        this.x += (dx/dist) * this.speed;
+        this.y += (dy/dist) * this.speed;
+      }
+    }
+    draw() {
+      ctx.save();
+      if (this.type === 'fast') {
+        ctx.fillStyle = '#ff5555';
+        ctx.shadowColor = '#bb0000';
+      } else if (this.type === 'tank') {
+        ctx.fillStyle = '#ffaa00';
+        ctx.shadowColor = '#aa7700';
+      } else {
+        ctx.fillStyle = '#ff9900';
+        ctx.shadowColor = '#cc6600';
+      }
+      ctx.shadowBlur = 15;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size/2, 0, Math.PI*2);
+      ctx.fill();
+
+      // health bar
+      ctx.fillStyle = '#333';
+      ctx.fillRect(this.x - this.size/2, this.y + this.size/2 + 4, this.size, 5);
+      ctx.fillStyle = '#0f0';
+      ctx.fillRect(this.x - this.size/2, this.y + this.size/2 + 4, this.size * (this.hp / (this.type==='tank'?70:30)), 5);
+
+      ctx.restore();
+    }
+    takeDamage(amount) {
+      this.hp -= amount;
+      if (this.hp <= 0) {
+        this.isDead = true;
+        return true;
+      }
+      return false;
+    }
+  }
+
+  // Helpers
+  function normalize(dx, dy) {
+    let dist = Math.hypot(dx, dy);
+    if (dist === 0) return [0,0];
+    return [dx / dist, dy / dist];
+  }
+
+  // Game vars init
+  function resetGame() {
+    player = new Player();
+    bullets = [];
+    enemies = [];
+    keys = {};
+    lastFire = 0;
+    wave = 1;
+    score = 0;
+    gameRunning = false;
+    paused = false;
+    invincibleTimer = 0;
+    updateUI();
+  }
+
+  // Spawn enemies by wave with difficulty ramp
+  function spawnWave(n) {
+    for (let i=0; i<n; i++) {
+      let rand = Math.random();
+      let type = 'normal';
+      if (rand < 0.3) type = 'fast';
+      else if (rand > 0.85) type = 'tank';
+      enemies.push(new Enemy(type));
+    }
+  }
+
+  // Shooting
+  function shootBullet(targetX, targetY) {
+    if (Date.now() - lastFire < FIRE_COOLDOWN) return;
+    lastFire = Date.now();
+    let dx = targetX - player.x;
+    let dy = targetY - player.y;
+    let [nx, ny] = normalize(dx, dy);
+    bullets.push(new Bullet(player.x, player.y, nx, ny));
+  }
+
+  // UI update
+  function updateUI() {
+    hpText.textContent = Math.max(0, Math.floor(player.hp));
+    hpBar.style.width = `${(player.hp / PLAYER_MAX_HP)*100}%`;
+    waveText.textContent = wave;
+    scoreText.textContent = score;
+  }
+
+  // Collision detection
+  function checkCollision(aX, aY, aSize, bX, bY, bSize) {
+    let dist = Math.hypot(aX - bX, aY - bY);
+    return dist < (aSize/2 + bSize/2);
+  }
+
+  // Game Loop
+  function gameLoop(timestamp) {
+    if (!gameRunning || paused) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Background grid
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    for(let x=0; x<canvas.width; x+=40) {
+      ctx.beginPath();
+      ctx.moveTo(x,0);
+      ctx.lineTo(x,canvas.height);
+      ctx.stroke();
+    }
+    for(let y=0; y<canvas.height; y+=40) {
+      ctx.beginPath();
+      ctx.moveTo(0,y);
+      ctx.lineTo(canvas.width,y);
+      ctx.stroke();
+    }
+
+    // Move & draw player
+    player.move();
+    player.draw();
+
+    // Update bullets
+    for (let b of bullets) {
+      b.update();
+      b.draw();
+    }
+    bullets = bullets.filter(b => !b.isDead);
+
+    // Update enemies
+    for (let e of enemies) {
+      e.update(player);
+      e.draw();
+    }
+
+    // Bullet-enemy collisions
+    for (let b of bullets) {
+      for (let e of enemies) {
+        if (!b.isDead && !e.isDead && checkCollision(b.x,b.y,BULLET_SIZE,e.x,e.y,e.size)) {
+          b.isDead = true;
+          if (e.takeDamage(10)) {
+            score += (e.type === 'tank' ? 30 : e.type === 'fast' ? 15 : 10);
+          }
+          updateUI();
+        }
+      }
+    }
+
+    // Enemy-player collisions
+    for (let e of enemies) {
+      if (!e.isDead && checkCollision(e.x, e.y, e.size, player.x, player.y, player.size)) {
+        if (player.takeDamage(10)) {
+          updateUI();
+          if (player.hp <= 0) {
+            endGame();
+            return;
+          }
+        }
+      }
+    }
+
+    // Remove dead enemies
+    enemies = enemies.filter(e => !e.isDead);
+
+    // Spawn next wave if all dead
+    if (enemies.length === 0) {
+      wave++;
+      spawnWave(4 + Math.floor(wave * 1.2));
+      updateUI();
+    }
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Start game
+  function startGame() {
+    resetGame();
+    spawnWave(4);
+    menu.classList.remove('active');
+    gameOverScreen.classList.remove('active');
+    pauseScreen.classList.remove('active');
+    gameRunning = true;
+    paused = false;
+    updateUI();
+    if (musicPlaying) playBgm();
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Pause toggle
+  function togglePause() {
+    if (!gameRunning) return;
+    if (paused) {
+      paused = false;
+      pauseScreen.classList.remove('active');
+      requestAnimationFrame(gameLoop);
+    } else {
+      paused = true;
+      pauseScreen.classList.add('active');
+    }
+  }
+
+  // End game
+  function endGame() {
+    gameRunning = false;
+    stopBgm();
+    finalWaveText.textContent = wave;
+    finalScoreText.textContent = score;
+    gameOverScreen.classList.add('active');
+  }
+
+  // Event listeners
+  window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === 'Escape') togglePause();
+  });
+  window.addEventListener('keyup', (e) => {
+    keys[e.key.toLowerCase()] = false;
+  });
+  canvas.addEventListener('click', (e) => {
+    if (!gameRunning || paused) return;
+    const rect = canvas.getBoundingClientRect();
+    shootBullet(e.clientX - rect.left, e.clientY - rect.top);
+  });
+
+  startBtn.onclick = startGame;
+  toggleMusicBtn.onclick = () => {
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+    toggleMusic();
+  };
+  resumeBtn.onclick = () => {
+    togglePause();
+  };
+  restartBtn.onclick = () => {
+    startGame();
+  };
+  exitBtn.onclick = () => {
+    gameRunning = false;
+    stopBgm();
+    pauseScreen.classList.remove('active');
+    gameOverScreen.classList.remove('active');
+    menu.classList.add('active');
+  };
+  tryAgainBtn.onclick = () => {
+    startGame();
+  };
+  goMenuBtn.onclick = () => {
+    gameRunning = false;
+    stopBgm();
+    gameOverScreen.classList.remove('active');
+    menu.classList.add('active');
+  };
+
+  resetGame();
+})();
+</script>
+
+</body>
+</html>
