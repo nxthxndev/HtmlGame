@@ -11,7 +11,7 @@ W : UP
 S : DOWN
 A : LEFT
 D : RIGHT
-
+FIRE : LEFTMOUSE
 # ScreenShots
 
 ![image](https://github.com/user-attachments/assets/b51f625c-d245-4533-a2c0-d86a79d17ee9)
